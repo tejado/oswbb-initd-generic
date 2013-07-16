@@ -1,0 +1,180 @@
+#!/bin/sh
+#
+# Init file for Oracle OSWatcher
+#	by Tommy Reynolds <Tommy.Reynolds@MegaCoder.com>
+#
+#
+# ported to Solaris from Oracle oswbb-service RPM
+#	by Tjado Mäcke <tjado@maecke.de>
+#
+# description:	automatically run Oracle OSWatcher at boot time and	\
+#		stop it upon system shutdown.  Attempt to gracefully	\
+#		recover from a crash by moving old OSWatcher logs	\
+#		to archive-<iso-date>.
+########################################################################
+
+########################################################################
+# Establish default values
+########################################################################
+# Set OSW_HOME to the directory where your OSWatcher tools are installed
+OSW_HOME="/opt/oswbb"
+# Set OSW_INTERVAL to the number of seconds between collections
+OSW_INTERVAL="30"
+# Set OSW_RETENTION to the number of hours logs are to be retained
+OSW_RETENTION="48"
+# Set OSW_USER to the owner of the OSW_HOME directory
+OSW_USER="root"
+# Set OSW_COMPRESSION to the desired compression scheme
+OSW_COMPRESSION="gzip"
+# Set OSW_ARCHIVE_BASE to path where "archive" will be created in
+OSW_ARCHIVE_BASE="${OSW_HOME}"
+########################################################################
+
+########################################################################
+# pull in oswbb settings
+########################################################################
+[ -f //etc/oswbb.conf ] && . //etc/oswbb.conf
+########################################################################
+
+RETVAL=1
+
+########################################################################
+# Some internal settings
+########################################################################
+
+PROGRAM='OSWatcher'
+#LOCKFILE=/var/run/oswbb.lck
+LOCKFILE=${OSW_HOME}/oswbb.lck
+
+SU=/bin/su
+RM=/bin/rm
+TOUCH=/usr/bin/touch
+ECHO=/usr/ucb/echo
+ECHO_T=/usr/bin/echo
+MKDIR=/usr/bin/mkdir
+NOHUP=/usr/bin/nohup
+SLEEP=/usr/bin/sleep
+
+
+########################################################################
+# oswbbHelper: executes oswbb-helper script under respective user
+########################################################################
+
+oswbbHelper() {
+	COMMAND=$1
+	if [ "${USER}" = "${OSW_USER}" ]; then
+		${OSW_HOME}/oswbb-helper.sh ${COMMAND} && (${ECHO} "successfull"; exit 0) || (${ECHO} "failed"; exit 1)
+	elif [ "${USER}" = "root" ]; then
+		${SU} "${OSW_USER}" -c "${OSW_HOME}/oswbb-helper.sh ${COMMAND}" && (${ECHO} "successfull"; exit 0) || (${ECHO} "failed"; exit 1)
+	else
+		(${ECHO} "Needs to be root or ${OSW_USER} to start ${PROGRAM}"; exit 2)
+	fi
+	
+	return $?
+}
+
+
+########################################################################
+# start: start the service
+########################################################################
+
+start() {
+	${ECHO} -n "Starting ${PROGRAM}: "
+	
+	# check if program is already running...
+	if [ -f "${LOCKFILE}" ]; then
+		echo "already running"
+		exit 1
+	fi
+	
+	oswbbHelper start
+	[ "$?" = 0 ] && ${TOUCH} ${LOCKFILE}
+	${ECHO}
+}
+
+########################################################################
+# stop: stop the service
+########################################################################
+
+stop() {
+	${ECHO} -n "Stopping ${PROGRAM}: "
+	
+	if [ -f "${LOCKFILE}" ]; then
+		oswbbHelper stop
+		[ "$?" = 0 ] && ${RM} -f "${LOCKFILE}"
+	else
+		${ECHO} -n "not running."
+		(exit 1)
+	fi
+	RETVAL=$?
+	${ECHO}
+}
+
+########################################################################
+# restart: stop, pause, then start the collection
+########################################################################
+
+restart() {
+	stop
+	${SLEEP} 10
+	start
+}
+
+########################################################################
+# info: Show the operational parameters
+########################################################################
+
+info() {
+	${ECHO} "${PROGRAM} Settings:"
+
+	${ECHO_T} "\tOSW_COMPRESSION   = \"${OSW_COMPRESSION}\""
+	${ECHO_T} "\tOSW_HOME          = \"${OSW_HOME}\""
+	${ECHO_T} "\tOSW_INTERVAL      = \"${OSW_INTERVAL}\""
+	${ECHO_T} "\tOSW_RETENTION     = \"${OSW_RETENTION}\""
+	${ECHO_T} "\tOSW_USER          = \"${OSW_USER}\""
+	${ECHO_T} "\tOSW_ARCHIVE_BASE  = \"${OSW_ARCHIVE_BASE}\""
+
+	if [ -f ${LOCKFILE} ]; then
+		${ECHO_T} "\tLock file present."
+	else
+		${ECHO_T} "\tLock file not present."
+	fi
+}
+
+########################################################################
+# Decide what to do based on first comand line arg
+########################################################################
+
+case "$1" in
+	start)
+		start
+		;;
+	stop)
+		stop
+		;;
+	restart | reload)
+		restart
+		;;
+	condrestart)
+		if [ -f ${LOCKFILE} ] ; then
+			restart
+		fi
+		;;
+	status)
+		if [ -f "${LOCKFILE}" ]; then
+			${ECHO} "${PROGRAM} is running."
+			RETVAL=0
+		else
+			${ECHO} "${PROGRAM} is not running."
+			RETVAL=1
+		fi
+		;;
+	info)
+		info
+		;;
+	*)
+		${ECHO} "Usage: $0 {start|stop|reload|restart|condrestart|status|info}"
+		RETVAL=1
+esac
+
+exit $RETVAL
